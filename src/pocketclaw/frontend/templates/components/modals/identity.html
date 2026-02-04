@@ -1,0 +1,42 @@
+<!--
+  PocketPaw Dashboard - Identity Modal
+
+  Changes (2026-02-03):
+  - Extracted from monolithic index.html
+  - Displays agent identity (IDENTITY.md) and soul (SOUL.md)
+-->
+<!-- Identity Modal -->
+<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-md p-4" x-show="showIdentity" x-transition.opacity @click.self="showIdentity = false">
+    <div class="w-full max-w-[800px] max-h-[85vh] flex flex-col bg-[#1c1c1e]/95 backdrop-blur-xl border border-[var(--glass-border)] rounded-[20px] shadow-2xl animate-[modalPop_0.25s_ease-out] overflow-hidden" @click.stop>
+        <div class="flex items-center justify-between px-6 py-5 border-b border-[var(--glass-border)] shrink-0">
+            <h2 class="text-[17px] font-semibold">Agent Identity</h2>
+            <button class="p-2 -mr-2 text-[var(--text-secondary)] hover:text-white hover:bg-white/10 rounded-lg transition-colors" @click="showIdentity = false"><i data-lucide="x" class="w-5 h-5"></i></button>
+        </div>
+        <div class="p-6 overflow-y-auto">
+            <div x-show="identityLoading" class="p-12 text-center text-white/50 flex flex-col items-center gap-3">
+                <i data-lucide="loader-2" class="w-8 h-8 animate-spin"></i> 
+                <span>Loading identity...</span>
+            </div>
+            <div x-show="!identityLoading" class="flex flex-col gap-6">
+                <div class="bg-black/30 p-5 rounded-xl border border-[var(--glass-border)] group hover:border-white/20 transition-colors">
+                    <h3 class="text-[var(--accent-color)] font-semibold mb-3 flex items-center gap-2">
+                        <i data-lucide="fingerprint" class="w-4 h-4"></i>
+                        Primary Directive (IDENTITY.md)
+                    </h3>
+                    <div class="bg-black/50 p-4 rounded-lg border border-white/5">
+                        <pre class="text-[11px] md:text-[12px] text-white/70 whitespace-pre-wrap font-mono leading-relaxed" x-text="identityData.identity_file"></pre>
+                    </div>
+                </div>
+                    <div class="bg-black/30 p-5 rounded-xl border border-[var(--glass-border)] group hover:border-white/20 transition-colors">
+                    <h3 class="text-[var(--accent-color)] font-semibold mb-3 flex items-center gap-2">
+                            <i data-lucide="heart" class="w-4 h-4"></i>
+                        Soul & Personality (SOUL.md)
+                    </h3>
+                    <div class="bg-black/50 p-4 rounded-lg border border-white/5">
+                        <pre class="text-[11px] md:text-[12px] text-white/70 whitespace-pre-wrap font-mono leading-relaxed" x-text="identityData.soul_file"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

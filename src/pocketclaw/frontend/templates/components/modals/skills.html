@@ -1,0 +1,78 @@
+<!--
+  PocketPaw Dashboard - Skills Modal
+
+  Changes (2026-02-03):
+  - Extracted from monolithic index.html
+  - Lists installed skills with /command syntax
+  - Run skills directly from UI
+-->
+<!-- Skills Modal -->
+<div
+class="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-md p-4"
+x-show="showSkills"
+x-transition.opacity
+@click.self="showSkills = false"
+>
+<div class="w-full max-w-[600px] flex flex-col bg-[#1c1c1e]/95 backdrop-blur-xl border border-[var(--glass-border)] rounded-[20px] shadow-2xl animate-[modalPop_0.25s_ease-out] overflow-hidden" @click.stop>
+    <div class="flex items-center justify-between px-6 py-5 border-b border-[var(--glass-border)] shrink-0">
+    <h2 class="text-[17px] font-semibold">Skills</h2>
+    <button class="p-2 -mr-2 text-[var(--text-secondary)] hover:text-white hover:bg-white/10 rounded-lg transition-colors" @click="showSkills = false"><i data-lucide="x" class="w-5 h-5"></i></button>
+    </div>
+    <div class="p-6 overflow-y-auto">
+    <div class="flex flex-col gap-5">
+        <!-- Info -->
+        <div class="bg-blue-500/10 border border-blue-500/20 p-4 rounded-xl flex gap-3 text-sm text-blue-200/90">
+            <i data-lucide="info" class="w-5 h-5 shrink-0 mt-0.5"></i>
+            <p>
+            Skills extend PocketPaw. Use <code class="text-white font-mono bg-white/10 px-1.5 py-0.5 rounded">/skill-name</code> in chat to run a skill.
+            Install more from <a href="https://skills.sh" target="_blank" class="text-white underline decoration-white/30 underline-offset-2 hover:decoration-white transition-all">skills.sh</a>
+            </p>
+        </div>
+
+        <!-- Loading State -->
+        <template x-if="skillsLoading && skills.length === 0">
+        <div class="p-8 text-center text-white/60 flex flex-col items-center gap-3">
+            <i data-lucide="loader-2" class="w-8 h-8 animate-spin"></i>
+            <span>Loading skills...</span>
+        </div>
+        </template>
+
+        <!-- Skills List -->
+        <template x-if="!skillsLoading || skills.length > 0">
+        <div class="flex flex-col border border-[var(--glass-border)] rounded-xl bg-black/20 overflow-hidden">
+            <template x-for="skill in skills" :key="skill.name">
+            <div class="flex items-start gap-4 p-4 border-b border-[var(--glass-border)] transition-colors last:border-b-0 hover:bg-white/5">
+                <div class="p-2 bg-[var(--warning-color)]/20 rounded-lg shrink-0">
+                    <i data-lucide="wand-2" class="w-5 h-5 text-[var(--warning-color)]"></i>
+                </div>
+                
+                <div class="flex-1 min-w-0">
+                <p class="font-medium text-[15px] flex items-center gap-1.5 text-white">
+                    <span class="font-mono text-[var(--accent-color)]">/</span><span x-text="skill.name"></span>
+                    <span x-show="skill.argument_hint" class="text-white/30 text-xs font-normal border border-white/10 px-1.5 py-0.5 rounded font-mono" x-text="skill.argument_hint"></span>
+                </p>
+                <p class="text-[13px] text-white/50 mt-1 line-clamp-2" x-text="skill.description"></p>
+                </div>
+                <button
+                class="bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-[8px] text-[12px] font-medium transition-all active:scale-95 shrink-0"
+                @click="runSkill(skill.name); showSkills = false;"
+                >
+                Run
+                </button>
+            </div>
+            </template>
+
+            <!-- Empty State -->
+            <template x-if="skills.length === 0">
+            <div class="p-12 text-center text-white/40 flex flex-col items-center gap-3">
+                <i data-lucide="wand-2" class="w-10 h-10 opacity-50"></i>
+                <span class="font-medium">No skills installed</span>
+                <span class="text-xs">Install skills with: <code class="text-[var(--accent-color)]">npx skills add owner/repo</code></span>
+            </div>
+            </template>
+        </div>
+        </template>
+    </div>
+    </div>
+</div>
+</div>

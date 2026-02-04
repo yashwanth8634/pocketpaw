@@ -3,42 +3,38 @@
 Lightweight FastAPI server that serves the frontend and handles WebSocket communication.
 
 Changes:
+  - 2026-02-04: Added Telegram setup API endpoints (/api/telegram/status, /api/telegram/setup, /api/telegram/pairing-status).
+  - 2026-02-03: Cleaned up duplicate imports, fixed duplicate save() calls.
   - 2026-02-02: Added agent status to get_settings response.
   - 2026-02-02: Enhanced logging to show which backend is processing requests.
 """
 
 import asyncio
 import base64
-import logging
-from pathlib import Path
-from typing import Optional
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-import uvicorn
 import io
+import logging
+import uuid
+from pathlib import Path
+
 import qrcode
+import uvicorn
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
-from pocketclaw.config import Settings, get_access_token, regenerate_token, get_settings, get_config_path
-
-from pocketclaw.scheduler import get_scheduler
-from pocketclaw.daemon import get_daemon
-from pocketclaw.skills import get_skill_loader, SkillExecutor
-# New imports for Nanobot Architecture
+from pocketclaw.agents.loop import AgentLoop
+from pocketclaw.bootstrap import DefaultBootstrapProvider
 from pocketclaw.bus import get_message_bus
 from pocketclaw.bus.adapters.websocket_adapter import WebSocketAdapter
-from pocketclaw.agents.loop import AgentLoop
-from pocketclaw.agents.loop import AgentLoop
-import uuid
-# Transparency Imports
-from pocketclaw.memory import get_memory_manager, MemoryType
+from pocketclaw.config import Settings, get_access_token, get_config_path, regenerate_token
+from pocketclaw.daemon import get_daemon
+from pocketclaw.memory import MemoryType, get_memory_manager
+from pocketclaw.scheduler import get_scheduler
 from pocketclaw.security import get_audit_logger
-from pocketclaw.bootstrap import DefaultBootstrapProvider
-# Tunnel access
+from pocketclaw.skills import SkillExecutor, get_skill_loader
 from pocketclaw.tunnel import get_tunnel_manager
-
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +46,15 @@ active_connections: list[WebSocket] = []
 
 # Get frontend directory
 FRONTEND_DIR = Path(__file__).parent / "frontend"
+TEMPLATES_DIR = FRONTEND_DIR / "templates"
+
+# Initialize Templates
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # Create FastAPI app
 app = FastAPI(title="PocketPaw Dashboard")
 
 # Allow CORS for WebSocket
-from fastapi.middleware.cors import CORSMiddleware
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -73,12 +71,9 @@ async def broadcast_reminder(reminder: dict):
     """Broadcast a reminder notification to all connected clients."""
     # Use new adapter for broadcast
     await ws_adapter.broadcast(reminder, msg_type="reminder")
-    
+
     # Legacy broadcast (backup)
-    message = {
-        "type": "reminder",
-        "reminder": reminder
-    }
+    message = {"type": "reminder", "reminder": reminder}
     for ws in active_connections[:]:
         try:
             await ws.send_json(message)
@@ -88,11 +83,7 @@ async def broadcast_reminder(reminder: dict):
 
 async def broadcast_intention(intention_id: str, chunk: dict):
     """Broadcast intention execution results to all connected clients."""
-    message = {
-        "type": "intention_event",
-        "intention_id": intention_id,
-        **chunk
-    }
+    message = {"type": "intention_event", "intention_id": intention_id, **chunk}
     for ws in active_connections[:]:
         try:
             await ws.send_json(message)
@@ -107,7 +98,7 @@ async def startup_event():
     # Start Message Bus Integration
     bus = get_message_bus()
     await ws_adapter.start(bus)
-    
+
     # Start Agent Loop
     asyncio.create_task(agent_loop.start())
     logger.info("🧠 Agent Loop started (Nanobot Architecture)")
@@ -115,7 +106,7 @@ async def startup_event():
     # Start reminder scheduler
     scheduler = get_scheduler()
     scheduler.start(callback=broadcast_reminder)
-    
+
     # Start proactive daemon
     daemon = get_daemon()
     daemon.start(stream_callback=broadcast_intention)
@@ -127,7 +118,7 @@ async def shutdown_event():
     # Stop Agent Loop
     await agent_loop.stop()
     await ws_adapter.stop()
-    
+
     # Stop proactive daemon
     daemon = get_daemon()
     daemon.stop()
@@ -138,16 +129,17 @@ async def shutdown_event():
 
 
 @app.get("/")
-async def index():
+async def index(request: Request):
     """Serve the main dashboard page."""
-    return FileResponse(FRONTEND_DIR / "index.html")
+    return templates.TemplateResponse("base.html", {"request": request})
 
 
 # ==================== Auth Middleware ====================
 
+
 async def verify_token(
     request: Request,
-    token: Optional[str] = Query(None),
+    token: str | None = Query(None),
 ):
     """
     Verify access token from query param or Authorization header.
@@ -160,22 +152,22 @@ async def verify_token(
 
     # Check query param
     current_token = get_access_token()
-    
+
     if token == current_token:
         return True
-        
+
     # Check header
     auth_header = request.headers.get("Authorization")
     if auth_header:
         if auth_header == f"Bearer {current_token}":
             return True
-            
+
     # Allow localhost (optional bypass for dev comfort, but stick to Plan 5A strictness)
     # Allow localhost (Trusted Local Environment)
     client_host = request.client.host
     if client_host == "127.0.0.1" or client_host == "localhost":
         return True
-    
+
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -183,23 +175,23 @@ async def verify_token(
 async def auth_middleware(request: Request, call_next):
     # Exempt routes
     exempt_paths = ["/static", "/favicon.ico", "/api/qr"]  # Allow getting QR code to login
-    
+
     # Simple check for static
     for path in exempt_paths:
         if request.url.path.startswith(path):
             return await call_next(request)
-    
+
     # Check for token in query or header
     token = request.query_params.get("token")
     auth_header = request.headers.get("Authorization")
     current_token = get_access_token()
-    
+
     is_valid = False
-    
+
     # 1. Check Query Param
     if token and token == current_token:
         is_valid = True
-    
+
     # 2. Check Header
     elif auth_header and auth_header == f"Bearer {current_token}":
         is_valid = True
@@ -207,22 +199,27 @@ async def auth_middleware(request: Request, call_next):
     # 3. Allow Localhost (Trusted)
     elif request.client.host == "127.0.0.1" or request.client.host == "localhost":
         is_valid = True
-        
-    # 3. Allow landing page request (index.html) IF it has the token? 
+
+    # 3. Allow landing page request (index.html) IF it has the token?
     # Actually, we want to allow loading index.html so the frontend can check localStorage
     # and then attach the header. BUT if it's the first visit, we need to allow index.html
     # so we can execute the JS.
     # So we should probably allowing "/" but block all "/api/*"
-    
-    if request.url.path == "/" or request.url.path.endswith(".js") or request.url.path.endswith(".css"):
-         return await call_next(request)
+
+    if (
+        request.url.path == "/"
+        or request.url.path.endswith(".js")
+        or request.url.path.endswith(".css")
+    ):
+        return await call_next(request)
 
     # API Protection
     if request.url.path.startswith("/api") or request.url.path.startswith("/ws"):
         if not is_valid:
             # For APIs return 401
-             from fastapi.responses import JSONResponse
-             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
     response = await call_next(request)
     return response
@@ -230,30 +227,32 @@ async def auth_middleware(request: Request, call_next):
 
 # ==================== QR Code & Token API ====================
 
+
 @app.get("/api/qr")
 async def get_qr_code(request: Request):
     """Generate QR login code."""
     # Logic: If tunnel is active, use tunnel URL. Else local IP.
     # For Phase 5A, simpler: Just use what the request came to, or attempt to find local IP.
     host = request.headers.get("host")
-    
+
     # Check for ACTIVE tunnel first to prioritize it
     tunnel = get_tunnel_manager()
     status = tunnel.get_status()
-    
+
     if status.get("active") and status.get("url"):
-         login_url = f"{status['url']}/?token={get_access_token()}"
+        login_url = f"{status['url']}/?token={get_access_token()}"
     else:
         # Fallback to current request host (localhost or network IP)
         protocol = "https" if "trycloudflare" in str(host) else "http"
         login_url = f"{protocol}://{host}/?token={get_access_token()}"
-    
+
     img = qrcode.make(login_url)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
-    
+
     return StreamingResponse(buf, media_type="image/png")
+
 
 @app.post("/api/token/regenerate")
 async def regenerate_access_token():
@@ -265,11 +264,13 @@ async def regenerate_access_token():
 
 # ==================== Tunnel API ====================
 
+
 @app.get("/api/remote/status")
 async def get_tunnel_status():
     """Get active tunnel status."""
     manager = get_tunnel_manager()
     return manager.get_status()
+
 
 @app.post("/api/remote/start")
 async def start_tunnel():
@@ -282,6 +283,7 @@ async def start_tunnel():
         # Error handling via JSON to frontend
         return {"error": str(e), "active": False}
 
+
 @app.post("/api/remote/stop")
 async def stop_tunnel():
     """Stop Cloudflare tunnel."""
@@ -290,21 +292,165 @@ async def stop_tunnel():
     return {"active": False}
 
 
+# ============================================================================
+# Telegram Setup API
+# ============================================================================
 
+# Global state for Telegram pairing
+_telegram_pairing_state = {
+    "session_secret": None,
+    "paired": False,
+    "user_id": None,
+    "temp_bot_app": None,
+}
+
+
+@app.get("/api/telegram/status")
+async def get_telegram_status():
+    """Get current Telegram configuration status."""
+    settings = Settings.load()
+    return {
+        "configured": bool(settings.telegram_bot_token and settings.allowed_user_id),
+        "user_id": settings.allowed_user_id,
+    }
+
+
+@app.post("/api/telegram/setup")
+async def setup_telegram(request: Request):
+    """Start Telegram pairing flow."""
+    import secrets
+
+    from telegram import Update
+    from telegram.ext import Application, CommandHandler, ContextTypes
+
+    data = await request.json()
+    bot_token = data.get("bot_token", "").strip()
+
+    if not bot_token:
+        return {"error": "Bot token is required"}
+
+    # Generate session secret
+    session_secret = secrets.token_urlsafe(32)
+    _telegram_pairing_state["session_secret"] = session_secret
+    _telegram_pairing_state["paired"] = False
+    _telegram_pairing_state["user_id"] = None
+
+    # Save token to settings
+    settings = Settings.load()
+    settings.telegram_bot_token = bot_token
+    settings.save()
+
+    try:
+        # Initialize temporary bot to verify token and get username
+        builder = Application.builder().token(bot_token)
+        temp_app = builder.build()
+
+        bot_user = await temp_app.bot.get_me()
+        username = bot_user.username
+
+        # Generate Deep Link: https://t.me/<username>?start=<secret>
+        deep_link = f"https://t.me/{username}?start={session_secret}"
+
+        # Generate QR code
+        qr = qrcode.QRCode(version=1, box_size=10, border=2)
+        qr.add_data(deep_link)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        qr_base64 = base64.b64encode(buffer.getvalue()).decode()
+        qr_url = f"data:image/png;base64,{qr_base64}"
+
+        # Define pairing handler
+        async def handle_pairing_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            if not update.message or not update.effective_user:
+                return
+
+            text = update.message.text or ""
+            parts = text.split()
+
+            if len(parts) < 2:
+                await update.message.reply_text(
+                    "⏳ Waiting for pairing... Please scan the QR code to start."
+                )
+                return
+
+            secret = parts[1]
+            if secret != _telegram_pairing_state["session_secret"]:
+                await update.message.reply_text(
+                    "❌ Invalid session token. Please refresh the setup page."
+                )
+                return
+
+            # Success!
+            user_id = update.effective_user.id
+            _telegram_pairing_state["paired"] = True
+            _telegram_pairing_state["user_id"] = user_id
+
+            # Save to config
+            settings = Settings.load()
+            settings.allowed_user_id = user_id
+            settings.save()
+
+            await update.message.reply_text(
+                "🎉 **Connected!**\n\nPocketPaw is now paired with this device.\nYou can close the browser window now.",
+                parse_mode="Markdown",
+            )
+
+            logger.info(
+                f"✅ Telegram paired with user: {update.effective_user.username} ({user_id})"
+            )
+
+        # Start listening for /start <secret>
+        temp_app.add_handler(CommandHandler("start", handle_pairing_start))
+        await temp_app.initialize()
+        await temp_app.start()
+        await temp_app.updater.start_polling(drop_pending_updates=True)
+
+        # Store for cleanup later
+        _telegram_pairing_state["temp_bot_app"] = temp_app
+
+        return {"qr_url": qr_url, "deep_link": deep_link}
+
+    except Exception as e:
+        logger.error(f"Telegram setup failed: {e}")
+        return {"error": f"Failed to connect to Telegram: {str(e)}"}
+
+
+@app.get("/api/telegram/pairing-status")
+async def get_telegram_pairing_status():
+    """Check if Telegram pairing is complete."""
+    paired = _telegram_pairing_state.get("paired", False)
+    user_id = _telegram_pairing_state.get("user_id")
+
+    # If paired, cleanup the temporary bot
+    if paired and _telegram_pairing_state.get("temp_bot_app"):
+        try:
+            temp_app = _telegram_pairing_state["temp_bot_app"]
+            if temp_app.updater.running:
+                await temp_app.updater.stop()
+            if temp_app.running:
+                await temp_app.stop()
+            await temp_app.shutdown()
+            _telegram_pairing_state["temp_bot_app"] = None
+        except Exception as e:
+            logger.warning(f"Error cleaning up temp bot: {e}")
+
+    return {"paired": paired, "user_id": user_id}
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
+async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(None)):
     """WebSocket endpoint for real-time communication."""
     # Verify Token
     expected_token = get_access_token()
-    
+
     # Allow localhost bypass for WebSocket too
     client_host = websocket.client.host
     is_localhost = client_host == "127.0.0.1" or client_host == "localhost"
 
     if token != expected_token and not is_localhost:
-        # Try waiting for an initial message with token? 
+        # Try waiting for an initial message with token?
         # Standard usage: ws://host/ws?token=XYZ
         # If missing/invalid, close.
         await websocket.close(code=4003, reason="Unauthorized")
@@ -314,56 +460,59 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
     # Track connection
     active_connections.append(websocket)
-    
+
     # Generate session ID for Nanobot bus
     chat_id = str(uuid.uuid4())
     await ws_adapter.register_connection(websocket, chat_id)
 
     # Send welcome notification with session info
-    await websocket.send_json({
-        "type": "connection_info",
-        "content": "👋 Connected to PocketPaw (Nanobot V2)",
-        "id": chat_id
-    })
+    await websocket.send_json(
+        {
+            "type": "connection_info",
+            "content": "👋 Connected to PocketPaw (Nanobot V2)",
+            "id": chat_id,
+        }
+    )
 
     # Load settings
     settings = Settings.load()
-    
+
     # Legacy state
-    agent_active = False 
-    agent_active = False 
-    
+    agent_active = False
+
     try:
         while True:
             data = await websocket.receive_json()
             action = data.get("action")
-            
+
             # Handle chat via MessageBus (Nanobot)
             if action == "chat":
                 log_msg = f"⚡ Processing message with Backend: {settings.agent_backend} (Provider: {settings.llm_provider})"
                 logger.warning(log_msg)  # Use WARNING to ensure it shows up
-                print(log_msg)           # Force stdout just in case
-                
+                print(log_msg)  # Force stdout just in case
+
                 # Only if using new backend, but let's default to new backend logic eventually
                 # For Phase 2 transition: We use the Bus!
                 # But allow fallback to old router if 'agent_active' is toggled specifically for old behavior?
                 # Actually, let's treat 'chat' as input to the Bus.
                 await ws_adapter.handle_message(chat_id, data)
-            
+
             # Legacy/Other actions
             elif action == "tool":
                 tool = data.get("tool")
                 await handle_tool(websocket, tool, settings, data)
-            
+
             # Handle agent toggle (Legacy router control)
             elif action == "toggle_agent":
                 # For now, this just logs, as the Loop is always running in background
                 # functionality-wise, but maybe we should respect this flag in the Loop?
                 agent_active = data.get("active", False)
-                await websocket.send_json({
-                    "type": "notification",
-                    "content": f"Legacy Mode: {'ON' if agent_active else 'OFF'} (Bus is always active)"
-                })
+                await websocket.send_json(
+                    {
+                        "type": "notification",
+                        "content": f"Legacy Mode: {'ON' if agent_active else 'OFF'} (Bus is always active)",
+                    }
+                )
 
             # Handle settings update
             elif action == "settings":
@@ -374,67 +523,63 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 if "bypass_permissions" in data:
                     settings.bypass_permissions = bool(data.get("bypass_permissions"))
                 settings.save()
-                
+
                 # Update Loop settings if needed (it reloads on each message via get_settings inside loop currently)
-                
-                await websocket.send_json({
-                    "type": "message",
-                    "content": "⚙️ Settings updated"
-                })
-                
+
+                await websocket.send_json({"type": "message", "content": "⚙️ Settings updated"})
+
             # ... keep other handlers ... (abbreviated)
 
-            
             # Handle API key save
             elif action == "save_api_key":
                 provider = data.get("provider")
                 key = data.get("key", "")
-                
+
                 if provider == "anthropic" and key:
                     settings.anthropic_api_key = key
                     settings.llm_provider = "anthropic"
                     settings.save()
-                    settings.save()
-                    await websocket.send_json({
-                        "type": "message",
-                        "content": "✅ Anthropic API key saved!"
-                    })
+                    await websocket.send_json(
+                        {"type": "message", "content": "✅ Anthropic API key saved!"}
+                    )
                 elif provider == "openai" and key:
                     settings.openai_api_key = key
                     settings.llm_provider = "openai"
                     settings.save()
-                    settings.save()
-                    await websocket.send_json({
-                        "type": "message",
-                        "content": "✅ OpenAI API key saved!"
-                    })
+                    await websocket.send_json(
+                        {"type": "message", "content": "✅ OpenAI API key saved!"}
+                    )
                 else:
-                    await websocket.send_json({
-                        "type": "error",
-                        "content": "Invalid API key or provider"
-                    })
-            
+                    await websocket.send_json(
+                        {"type": "error", "content": "Invalid API key or provider"}
+                    )
+
             # Handle get_settings - return current settings to frontend
             elif action == "get_settings":
                 # Get agent status if available
                 agent_status = None
                 # Get agent status if available
-                agent_status = {"status": "running" if agent_loop._running else "stopped", "backend": "AgentLoop"}
+                agent_status = {
+                    "status": "running" if agent_loop._running else "stopped",
+                    "backend": "AgentLoop",
+                }
 
-                await websocket.send_json({
-                    "type": "settings",
-                    "content": {
-                        "agentBackend": settings.agent_backend,
-                        "llmProvider": settings.llm_provider,
-                        "anthropicModel": settings.anthropic_model,
-                        "bypassPermissions": settings.bypass_permissions,
-                        "hasAnthropicKey": bool(settings.anthropic_api_key),
-                        "hasOpenaiKey": bool(settings.openai_api_key),
-                        "agentActive": agent_active,
-                        "agentStatus": agent_status,
+                await websocket.send_json(
+                    {
+                        "type": "settings",
+                        "content": {
+                            "agentBackend": settings.agent_backend,
+                            "llmProvider": settings.llm_provider,
+                            "anthropicModel": settings.anthropic_model,
+                            "bypassPermissions": settings.bypass_permissions,
+                            "hasAnthropicKey": bool(settings.anthropic_api_key),
+                            "hasOpenaiKey": bool(settings.openai_api_key),
+                            "agentActive": agent_active,
+                            "agentStatus": agent_status,
+                        },
                     }
-                })
-            
+                )
+
             # Handle file navigation (legacy)
             elif action == "navigate":
                 path = data.get("path", "")
@@ -452,10 +597,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 # Add time remaining to each reminder
                 for r in reminders:
                     r["time_remaining"] = scheduler.format_time_remaining(r)
-                await websocket.send_json({
-                    "type": "reminders",
-                    "reminders": reminders
-                })
+                await websocket.send_json({"type": "reminders", "reminders": reminders})
 
             elif action == "add_reminder":
                 message = data.get("message", "")
@@ -464,39 +606,29 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 if reminder:
                     reminder["time_remaining"] = scheduler.format_time_remaining(reminder)
-                    await websocket.send_json({
-                        "type": "reminder_added",
-                        "reminder": reminder
-                    })
+                    await websocket.send_json({"type": "reminder_added", "reminder": reminder})
                 else:
-                    await websocket.send_json({
-                        "type": "error",
-                        "content": "Could not parse time from message. Try 'in 5 minutes' or 'at 3pm'"
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "content": "Could not parse time from message. Try 'in 5 minutes' or 'at 3pm'",
+                        }
+                    )
 
             elif action == "delete_reminder":
                 reminder_id = data.get("id", "")
                 scheduler = get_scheduler()
                 if scheduler.delete_reminder(reminder_id):
-                    await websocket.send_json({
-                        "type": "reminder_deleted",
-                        "id": reminder_id
-                    })
+                    await websocket.send_json({"type": "reminder_deleted", "id": reminder_id})
                 else:
-                    await websocket.send_json({
-                        "type": "error",
-                        "content": "Reminder not found"
-                    })
+                    await websocket.send_json({"type": "error", "content": "Reminder not found"})
 
             # ==================== Intentions API ====================
 
             elif action == "get_intentions":
                 daemon = get_daemon()
                 intentions = daemon.get_intentions()
-                await websocket.send_json({
-                    "type": "intentions",
-                    "intentions": intentions
-                })
+                await websocket.send_json({"type": "intentions", "intentions": intentions})
 
             elif action == "create_intention":
                 daemon = get_daemon()
@@ -506,17 +638,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         prompt=data.get("prompt", ""),
                         trigger=data.get("trigger", {"type": "cron", "schedule": "0 9 * * *"}),
                         context_sources=data.get("context_sources", []),
-                        enabled=data.get("enabled", True)
+                        enabled=data.get("enabled", True),
                     )
-                    await websocket.send_json({
-                        "type": "intention_created",
-                        "intention": intention
-                    })
+                    await websocket.send_json({"type": "intention_created", "intention": intention})
                 except Exception as e:
-                    await websocket.send_json({
-                        "type": "error",
-                        "content": f"Failed to create intention: {e}"
-                    })
+                    await websocket.send_json(
+                        {"type": "error", "content": f"Failed to create intention: {e}"}
+                    )
 
             elif action == "update_intention":
                 daemon = get_daemon()
@@ -524,44 +652,26 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 updates = data.get("updates", {})
                 intention = daemon.update_intention(intention_id, updates)
                 if intention:
-                    await websocket.send_json({
-                        "type": "intention_updated",
-                        "intention": intention
-                    })
+                    await websocket.send_json({"type": "intention_updated", "intention": intention})
                 else:
-                    await websocket.send_json({
-                        "type": "error",
-                        "content": "Intention not found"
-                    })
+                    await websocket.send_json({"type": "error", "content": "Intention not found"})
 
             elif action == "delete_intention":
                 daemon = get_daemon()
                 intention_id = data.get("id", "")
                 if daemon.delete_intention(intention_id):
-                    await websocket.send_json({
-                        "type": "intention_deleted",
-                        "id": intention_id
-                    })
+                    await websocket.send_json({"type": "intention_deleted", "id": intention_id})
                 else:
-                    await websocket.send_json({
-                        "type": "error",
-                        "content": "Intention not found"
-                    })
+                    await websocket.send_json({"type": "error", "content": "Intention not found"})
 
             elif action == "toggle_intention":
                 daemon = get_daemon()
                 intention_id = data.get("id", "")
                 intention = daemon.toggle_intention(intention_id)
                 if intention:
-                    await websocket.send_json({
-                        "type": "intention_toggled",
-                        "intention": intention
-                    })
+                    await websocket.send_json({"type": "intention_toggled", "intention": intention})
                 else:
-                    await websocket.send_json({
-                        "type": "error",
-                        "content": "Intention not found"
-                    })
+                    await websocket.send_json({"type": "error", "content": "Intention not found"})
 
             elif action == "run_intention":
                 daemon = get_daemon()
@@ -569,16 +679,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 intention = daemon.get_intention(intention_id)
                 if intention:
                     # Run in background, results streamed via broadcast_intention
-                    await websocket.send_json({
-                        "type": "notification",
-                        "content": f"🚀 Running intention: {intention['name']}"
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "notification",
+                            "content": f"🚀 Running intention: {intention['name']}",
+                        }
+                    )
                     asyncio.create_task(daemon.run_intention_now(intention_id))
                 else:
-                    await websocket.send_json({
-                        "type": "error",
-                        "content": "Intention not found"
-                    })
+                    await websocket.send_json({"type": "error", "content": "Intention not found"})
 
             # ==================== Skills API ====================
 
@@ -593,10 +702,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     }
                     for s in loader.get_invocable()
                 ]
-                await websocket.send_json({
-                    "type": "skills",
-                    "skills": skills
-                })
+                await websocket.send_json({"type": "skills", "skills": skills})
 
             elif action == "run_skill":
                 skill_name = data.get("name", "")
@@ -606,15 +712,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 skill = loader.get(skill_name)
 
                 if not skill:
-                    await websocket.send_json({
-                        "type": "error",
-                        "content": f"Skill not found: {skill_name}"
-                    })
+                    await websocket.send_json(
+                        {"type": "error", "content": f"Skill not found: {skill_name}"}
+                    )
                 else:
-                    await websocket.send_json({
-                        "type": "notification",
-                        "content": f"🎯 Running skill: {skill_name}"
-                    })
+                    await websocket.send_json(
+                        {"type": "notification", "content": f"🎯 Running skill: {skill_name}"}
+                    )
 
                     # Execute skill through agent
                     executor = SkillExecutor(settings)
@@ -637,6 +741,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
 # ==================== Transparency APIs ====================
 
+
 @app.get("/api/identity")
 async def get_identity():
     """Get agent identity context."""
@@ -651,6 +756,7 @@ async def get_identity():
         # "user_file": context.user,   # Not in BootstrapContext
     }
 
+
 @app.get("/api/memory/session")
 async def get_session_memory(id: str = "", limit: int = 50):
     """Get session memory."""
@@ -658,6 +764,7 @@ async def get_session_memory(id: str = "", limit: int = 50):
         return []
     manager = get_memory_manager()
     return await manager.get_session_history(id, limit=limit)
+
 
 @app.get("/api/memory/long_term")
 async def get_long_term_memory(limit: int = 50):
@@ -674,79 +781,71 @@ async def get_long_term_memory(limit: int = 50):
         for item in items
     ]
 
+
 @app.get("/api/audit")
 async def get_audit_log(limit: int = 50):
     """Get audit logs."""
     logger = get_audit_logger()
     if not logger.log_path.exists():
         return []
-    
+
     logs = []
     try:
         # Read last N lines efficiently-ish
-        with open(logger.log_path, "r") as f:
+        with open(logger.log_path) as f:
             lines = f.readlines()
-            
+
         for line in reversed(lines):
-            if len(logs) >= limit: break
+            if len(logs) >= limit:
+                break
             try:
                 import json
+
                 logs.append(json.loads(line))
-            except: pass
+            except:
+                pass
     except Exception as e:
         return {"error": str(e)}
-        
-    return logs
 
+    return logs
 
 
 async def handle_tool(websocket: WebSocket, tool: str, settings: Settings, data: dict):
     """Handle tool execution."""
-    
+
     if tool == "status":
         from pocketclaw.tools.status import get_system_status
+
         status = get_system_status()  # sync function
-        await websocket.send_json({
-            "type": "status",
-            "content": status
-        })
-    
+        await websocket.send_json({"type": "status", "content": status})
+
     elif tool == "screenshot":
         from pocketclaw.tools.screenshot import take_screenshot
+
         result = take_screenshot()  # sync function
-        
+
         if isinstance(result, bytes):
-            await websocket.send_json({
-                "type": "screenshot",
-                "image": base64.b64encode(result).decode()
-            })
+            await websocket.send_json(
+                {"type": "screenshot", "image": base64.b64encode(result).decode()}
+            )
         else:
-            await websocket.send_json({
-                "type": "error",
-                "content": result
-            })
-    
+            await websocket.send_json({"type": "error", "content": result})
+
     elif tool == "fetch":
         from pocketclaw.tools.fetch import list_directory
+
         path = data.get("path") or str(Path.home())
         result = list_directory(path, settings.file_jail_path)  # sync function
-        await websocket.send_json({
-            "type": "message",
-            "content": result
-        })
-    
+        await websocket.send_json({"type": "message", "content": result})
+
     elif tool == "panic":
-        await websocket.send_json({
-            "type": "message",
-            "content": "🛑 PANIC: All agent processes stopped!"
-        })
+        await websocket.send_json(
+            {"type": "message", "content": "🛑 PANIC: All agent processes stopped!"}
+        )
         # TODO: Actually stop agent processes
-    
+
     else:
-        await websocket.send_json({
-            "type": "error",
-            "content": f"Unknown tool: {tool}"
-        })
+        await websocket.send_json({"type": "error", "content": f"Unknown tool: {tool}"})
 
 
 async def handle_file_navigation(websocket: WebSocket, path: str, settings: Settings):
@@ -754,10 +853,7 @@ async def handle_file_navigation(websocket: WebSocket, path: str, settings: Sett
     from pocketclaw.tools.fetch import list_directory
 
     result = list_directory(path, settings.file_jail_path)  # sync function
-    await websocket.send_json({
-        "type": "message",
-        "content": result
-    })
+    await websocket.send_json({"type": "message", "content": result})
 
 
 async def handle_file_browse(websocket: WebSocket, path: str, settings: Settings):
@@ -779,24 +875,17 @@ async def handle_file_browse(websocket: WebSocket, path: str, settings: Settings
 
     # Security check
     if not is_safe_path(resolved_path, jail):
-        await websocket.send_json({
-            "type": "files",
-            "error": "Access denied: path outside allowed directory"
-        })
+        await websocket.send_json(
+            {"type": "files", "error": "Access denied: path outside allowed directory"}
+        )
         return
 
     if not resolved_path.exists():
-        await websocket.send_json({
-            "type": "files",
-            "error": "Path does not exist"
-        })
+        await websocket.send_json({"type": "files", "error": "Path does not exist"})
         return
 
     if not resolved_path.is_dir():
-        await websocket.send_json({
-            "type": "files",
-            "error": "Not a directory"
-        })
+        await websocket.send_json({"type": "files", "error": "Not a directory"})
         return
 
     # Build file list
@@ -808,10 +897,7 @@ async def handle_file_browse(websocket: WebSocket, path: str, settings: Settings
             if item.name.startswith("."):
                 continue  # Skip hidden files
 
-            file_info = {
-                "name": item.name,
-                "isDir": item.is_dir()
-            }
+            file_info = {"name": item.name, "isDir": item.is_dir()}
 
             if not item.is_dir():
                 try:
@@ -819,19 +905,16 @@ async def handle_file_browse(websocket: WebSocket, path: str, settings: Settings
                     if size < 1024:
                         file_info["size"] = f"{size} B"
                     elif size < 1024 * 1024:
-                        file_info["size"] = f"{size/1024:.1f} KB"
+                        file_info["size"] = f"{size / 1024:.1f} KB"
                     else:
-                        file_info["size"] = f"{size/(1024*1024):.1f} MB"
+                        file_info["size"] = f"{size / (1024 * 1024):.1f} MB"
                 except Exception:
                     file_info["size"] = "?"
 
             files.append(file_info)
 
     except PermissionError:
-        await websocket.send_json({
-            "type": "files",
-            "error": "Permission denied"
-        })
+        await websocket.send_json({"type": "files", "error": "Permission denied"})
         return
 
     # Calculate relative path from home for display
@@ -841,11 +924,7 @@ async def handle_file_browse(websocket: WebSocket, path: str, settings: Settings
     except ValueError:
         display_path = str(resolved_path)
 
-    await websocket.send_json({
-        "type": "files",
-        "path": display_path,
-        "files": files
-    })
+    await websocket.send_json({"type": "files", "path": display_path, "files": files})
 
 
 def run_dashboard(host: str = "127.0.0.1", port: int = 8888):
@@ -854,7 +933,7 @@ def run_dashboard(host: str = "127.0.0.1", port: int = 8888):
     print("🐾 POCKETPAW WEB DASHBOARD")
     print("=" * 50)
     print(f"\n🌐 Open http://localhost:{port} in your browser\n")
-    
+
     uvicorn.run(app, host=host, port=port)
 
 

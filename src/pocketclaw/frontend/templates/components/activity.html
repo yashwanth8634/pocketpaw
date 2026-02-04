@@ -1,0 +1,18 @@
+<!--
+  PocketPaw Dashboard - Activity Log Component
+
+  Changes (2026-02-03):
+  - Extracted from monolithic index.html
+  - Displays activityLog data with timestamp and colored log levels
+-->
+<!-- Activity View -->
+<div class="flex-1 flex flex-col pt-24 px-4 md:px-8 pb-8 overflow-hidden bg-black font-mono" x-show="view === 'activity'">
+    <div class="terminal-output text-[12px] md:text-[13px] text-[#BBB] leading-relaxed space-y-1" x-ref="activityLog">
+    <template x-for="(log, index) in activityLog" :key="index">
+        <div class="flex gap-3" :class="'term-' + log.level">
+        <span class="text-[#555] whitespace-nowrap" x-text="log.time"></span>
+        <span x-html="log.message" class="break-words"></span>
+        </div>
+    </template>
+    </div>
+</div>

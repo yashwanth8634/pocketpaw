@@ -1,0 +1,39 @@
+<!--
+  PocketPaw Dashboard - Audit Log Modal
+
+  Changes (2026-02-03):
+  - Extracted from monolithic index.html
+  - Displays security audit log with severity-colored entries
+-->
+<!-- Audit Log Modal -->
+<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-md p-4" x-show="showAudit" x-transition.opacity @click.self="showAudit = false">
+    <div class="w-full max-w-[800px] max-h-[85vh] flex flex-col bg-[#1c1c1e]/95 backdrop-blur-xl border border-[var(--glass-border)] rounded-[20px] shadow-2xl animate-[modalPop_0.25s_ease-out] overflow-hidden" @click.stop>
+        <div class="flex items-center justify-between px-6 py-5 border-b border-[var(--glass-border)] shrink-0">
+            <h2 class="text-[17px] font-semibold">Audit Log</h2>
+            <button class="p-2 -mr-2 text-[var(--text-secondary)] hover:text-white hover:bg-white/10 rounded-lg transition-colors" @click="showAudit = false"><i data-lucide="x" class="w-5 h-5"></i></button>
+        </div>
+        <div class="p-6 overflow-y-auto">
+            <div x-show="auditLoading" class="p-8 text-center"><i data-lucide="loader-2" class="w-8 h-8 animate-spin mx-auto text-white/50"></i></div>
+            <div class="flex flex-col gap-2 font-mono text-xs">
+                <template x-for="log in auditLogs" :key="log.id">
+                    <div class="p-3 rounded-lg border-l-[3px] bg-black/30 hover:bg-white/5 transition-colors" 
+                            :class="{
+                            'border-[var(--info-color)]': log.severity === 'info',
+                            'border-[var(--warning-color)]': log.severity === 'warning',
+                            'border-[var(--danger-color)]': log.severity === 'critical' || log.severity === 'alert'
+                            }">
+                        <div class="flex justify-between text-white/40 mb-1.5">
+                            <span x-text="new Date(log.timestamp).toLocaleTimeString()"></span>
+                            <span x-text="log.severity.toUpperCase()" :class="log.severity === 'critical' ? 'text-[var(--danger-color)]' : ''"></span>
+                        </div>
+                        <div class="flex gap-2.5 mb-1.5">
+                            <span class="bg-white/10 px-1.5 py-0.5 rounded text-[var(--accent-color)] font-semibold" x-text="log.action"></span>
+                            <span class="text-white/90" x-text="log.target"></span>
+                        </div>
+                        <div class="text-white/50 break-all" x-text="JSON.stringify(log.context)"></div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+</div>

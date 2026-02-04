@@ -2,6 +2,12 @@
  * PocketPaw Main Application
  * Alpine.js component for the dashboard
  *
+ * Changes (2026-02-04):
+ * - Added Telegram setup in "Take Paw With You" modal
+ * - Added remoteTab state for QR/Telegram tabs
+ * - Added telegramStatus, telegramForm, telegramLoading state
+ * - Added getTelegramStatus(), startTelegramPairing(), startTelegramPolling() methods
+ *
  * Changes (2026-02-02):
  * - Fixed auto-scroll: Added scrollToBottom() method with requestAnimationFrame
  * - Streaming scroll: Now scrolls during streaming content updates
@@ -45,8 +51,15 @@ function app() {
 
         // Remote Access state
         showRemote: false,
+        remoteTab: 'qr',  // 'qr' or 'telegram'
         remoteStatus: { active: false, url: '', installed: false },
         tunnelLoading: false,
+
+        // Telegram state
+        telegramStatus: { configured: false, user_id: null },
+        telegramForm: { botToken: '', qrCode: '', error: '' },
+        telegramLoading: false,
+        telegramPollInterval: null,
 
         // Transparency Panel state
         showIdentity: false,
@@ -175,6 +188,12 @@ function app() {
                 // Fetch initial status and settings
                 socket.runTool('status');
                 socket.send('get_settings');
+                
+                // Fetch initial data for sidebar badges
+                socket.send('get_reminders');
+                socket.send('get_intentions');
+                socket.send('get_skills');
+
                 // Auto-activate agent mode
                 if (this.agentActive) {
                     socket.toggleAgent(true);
@@ -1160,11 +1179,11 @@ function app() {
          */
         async regenerateToken() {
             if (!confirm('Are you sure? This will invalidate all existing sessions (including your phone).')) return;
-            
+
             try {
                 const res = await fetch('/api/token/regenerate', { method: 'POST' });
                 const data = await res.json();
-                
+
                 if (data.token) {
                     localStorage.setItem('pocketpaw_token', data.token);
                     this.showToast('Token regenerated! Please re-scan the QR code.', 'success');
@@ -1174,6 +1193,90 @@ function app() {
                 }
             } catch (e) {
                 this.showToast('Failed to regenerate token', 'error');
+            }
+        },
+
+        /**
+         * Get Telegram configuration status
+         */
+        async getTelegramStatus() {
+            try {
+                const res = await fetch('/api/telegram/status');
+                if (res.ok) {
+                    this.telegramStatus = await res.json();
+                }
+            } catch (e) {
+                console.error('Failed to get Telegram status', e);
+            }
+        },
+
+        /**
+         * Start Telegram pairing flow
+         */
+        async startTelegramPairing() {
+            this.telegramLoading = true;
+            this.telegramForm.error = '';
+            this.telegramForm.qrCode = '';
+
+            try {
+                const res = await fetch('/api/telegram/setup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bot_token: this.telegramForm.botToken })
+                });
+                const data = await res.json();
+
+                if (data.error) {
+                    this.telegramForm.error = data.error;
+                } else if (data.qr_url) {
+                    this.telegramForm.qrCode = data.qr_url;
+                    // Start polling for pairing completion
+                    this.startTelegramPolling();
+                }
+            } catch (e) {
+                this.telegramForm.error = 'Failed to connect: ' + e.message;
+            } finally {
+                this.telegramLoading = false;
+            }
+        },
+
+        /**
+         * Poll for Telegram pairing completion
+         */
+        startTelegramPolling() {
+            // Clear any existing interval
+            if (this.telegramPollInterval) {
+                clearInterval(this.telegramPollInterval);
+            }
+
+            this.telegramPollInterval = setInterval(async () => {
+                try {
+                    const res = await fetch('/api/telegram/pairing-status');
+                    const data = await res.json();
+
+                    if (data.paired) {
+                        clearInterval(this.telegramPollInterval);
+                        this.telegramPollInterval = null;
+                        this.telegramForm.qrCode = '';
+                        this.telegramForm.botToken = '';
+                        this.telegramStatus = { configured: true, user_id: data.user_id };
+                        this.showToast('Telegram connected successfully!', 'success');
+                        // Reinit icons for the success state
+                        setTimeout(() => lucide.createIcons(), 100);
+                    }
+                } catch (e) {
+                    console.error('Polling error', e);
+                }
+            }, 2000);
+        },
+
+        /**
+         * Stop Telegram polling (cleanup)
+         */
+        stopTelegramPolling() {
+            if (this.telegramPollInterval) {
+                clearInterval(this.telegramPollInterval);
+                this.telegramPollInterval = null;
             }
         }
     };
