@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="paw.png" alt="PocketPaw" width="200">
+  <img src="paw.png" alt="PocketPaw" width="100">
 </p>
 
 <h1 align="center">PocketPaw</h1>
