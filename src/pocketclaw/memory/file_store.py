@@ -1,5 +1,6 @@
 # File-based memory store implementation.
 # Created: 2026-02-02 - Memory System
+# Updated: 2026-02-09 - Fixed UUID collision, daily file loading, search, persistent delete
 #
 # Stores memories as markdown files for human readability:
 # - ~/.pocketclaw/memory/MEMORY.md     (long-term)
@@ -9,11 +10,134 @@
 import json
 import re
 import uuid
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any
 
-from pocketclaw.memory.protocol import MemoryStoreProtocol, MemoryEntry, MemoryType
+from pocketclaw.memory.protocol import MemoryEntry, MemoryType
+
+# Stop words excluded from word-overlap search scoring
+_STOP_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "can",
+        "to",
+        "of",
+        "in",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+        "from",
+        "as",
+        "into",
+        "about",
+        "like",
+        "through",
+        "after",
+        "over",
+        "between",
+        "out",
+        "against",
+        "during",
+        "without",
+        "before",
+        "under",
+        "around",
+        "among",
+        "and",
+        "but",
+        "or",
+        "nor",
+        "not",
+        "so",
+        "yet",
+        "both",
+        "either",
+        "neither",
+        "each",
+        "every",
+        "all",
+        "any",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "only",
+        "own",
+        "same",
+        "than",
+        "too",
+        "very",
+        "just",
+        "because",
+        "if",
+        "when",
+        "where",
+        "how",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "this",
+        "that",
+        "these",
+        "those",
+        "i",
+        "me",
+        "my",
+        "we",
+        "our",
+        "you",
+        "your",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "it",
+        "its",
+        "they",
+        "them",
+        "their",
+    }
+)
+
+
+def _make_deterministic_id(path: Path, header: str, body: str) -> str:
+    """Generate a deterministic UUID5 from path, header, AND body content."""
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{path}:{header}:{body}"))
+
+
+def _tokenize(text: str) -> set[str]:
+    """Lowercase, split on non-alpha, strip stop words."""
+    words = set(re.findall(r"[a-z0-9]+", text.lower()))
+    return words - _STOP_WORDS
 
 
 class FileMemoryStore:
@@ -45,10 +169,11 @@ class FileMemoryStore:
         if self.long_term_file.exists():
             self._parse_markdown_file(self.long_term_file, MemoryType.LONG_TERM)
 
-        # Load today's daily notes
-        today_file = self._get_daily_file(date.today())
-        if today_file.exists():
-            self._parse_markdown_file(today_file, MemoryType.DAILY)
+        # Load ALL daily files (not just today's)
+        for daily_file in sorted(
+            self.base_path.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md")
+        ):
+            self._parse_markdown_file(daily_file, MemoryType.DAILY)
 
     def _parse_markdown_file(self, path: Path, memory_type: MemoryType) -> None:
         """Parse a markdown file into memory entries."""
@@ -67,7 +192,7 @@ class FileMemoryStore:
             body = "\n".join(lines[1:]).strip()
 
             if body:
-                entry_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{path}:{header}"))
+                entry_id = _make_deterministic_id(path, header, body)
                 self._index[entry_id] = MemoryEntry(
                     id=entry_id,
                     type=memory_type,
@@ -95,20 +220,35 @@ class FileMemoryStore:
 
     async def save(self, entry: MemoryEntry) -> str:
         """Save a memory entry."""
-        if not entry.id:
-            entry.id = str(uuid.uuid4())
+        if entry.type == MemoryType.SESSION:
+            # Session entries use random UUIDs (no collision issue)
+            if not entry.id:
+                entry.id = str(uuid.uuid4())
+            entry.updated_at = datetime.now()
+            self._index[entry.id] = entry
+            await self._save_session_entry(entry)
+            return entry.id
 
+        # For LONG_TERM and DAILY: compute deterministic ID from content
+        header = entry.metadata.get("header", "Memory")
+        if entry.type == MemoryType.LONG_TERM:
+            target_path = self.long_term_file
+        else:
+            target_path = self._get_daily_file(date.today())
+
+        det_id = _make_deterministic_id(target_path, header, entry.content)
+
+        # Dedup: if this exact content already exists, skip
+        if det_id in self._index:
+            return det_id
+
+        entry.id = det_id
+        entry.metadata["source"] = str(target_path)
         entry.updated_at = datetime.now()
         self._index[entry.id] = entry
 
-        # Persist based on type
-        if entry.type == MemoryType.LONG_TERM:
-            await self._append_to_markdown(self.long_term_file, entry)
-        elif entry.type == MemoryType.DAILY:
-            daily_file = self._get_daily_file(date.today())
-            await self._append_to_markdown(daily_file, entry)
-        elif entry.type == MemoryType.SESSION:
-            await self._save_session_entry(entry)
+        # Persist to markdown
+        await self._append_to_markdown(target_path, entry)
 
         return entry.id
 
@@ -158,12 +298,40 @@ class FileMemoryStore:
         return self._index.get(entry_id)
 
     async def delete(self, entry_id: str) -> bool:
-        """Delete a memory entry."""
-        if entry_id in self._index:
-            del self._index[entry_id]
-            # Note: Doesn't delete from files (append-only design)
-            return True
-        return False
+        """Delete a memory entry and rewrite source file."""
+        if entry_id not in self._index:
+            return False
+
+        entry = self._index.pop(entry_id)
+
+        # Rewrite the source markdown file without this entry
+        source = entry.metadata.get("source")
+        if source:
+            self._rewrite_markdown(Path(source))
+
+        return True
+
+    def _rewrite_markdown(self, path: Path) -> None:
+        """Reconstruct a markdown file from remaining index entries for that file."""
+        source_str = str(path)
+        entries = [e for e in self._index.values() if e.metadata.get("source") == source_str]
+
+        if not entries:
+            # No entries left — remove file
+            if path.exists():
+                path.unlink()
+            return
+
+        parts = []
+        for e in entries:
+            header = e.metadata.get("header", "Memory")
+            tags_str = " ".join(f"#{t}" for t in e.tags) if e.tags else ""
+            section = f"## {header}\n\n{e.content}"
+            if tags_str:
+                section += f"\n\n{tags_str}"
+            parts.append(section)
+
+        path.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
 
     async def search(
         self,
@@ -172,8 +340,9 @@ class FileMemoryStore:
         tags: list[str] | None = None,
         limit: int = 10,
     ) -> list[MemoryEntry]:
-        """Search memories."""
-        results = []
+        """Search memories using word-overlap scoring."""
+        candidates: list[tuple[float, MemoryEntry]] = []
+        query_words = _tokenize(query) if query else set()
 
         for entry in self._index.values():
             # Type filter
@@ -184,16 +353,27 @@ class FileMemoryStore:
             if tags and not any(t in entry.tags for t in tags):
                 continue
 
-            # Query filter (simple substring match)
-            if query and query.lower() not in entry.content.lower():
-                continue
+            # Query filter: word-overlap scoring
+            if query_words:
+                content_words = _tokenize(entry.content)
+                # Also include header in searchable text
+                header = entry.metadata.get("header", "")
+                if header:
+                    content_words |= _tokenize(header)
 
-            results.append(entry)
+                overlap = query_words & content_words
+                if not overlap:
+                    continue
+                score = len(overlap) / len(query_words)
+            else:
+                score = 0.0
 
-            if len(results) >= limit:
-                break
+            candidates.append((score, entry))
 
-        return results
+        # Sort by score descending
+        candidates.sort(key=lambda x: x[0], reverse=True)
+
+        return [entry for _, entry in candidates[:limit]]
 
     async def get_by_type(self, memory_type: MemoryType, limit: int = 100) -> list[MemoryEntry]:
         """Get all memories of a specific type."""

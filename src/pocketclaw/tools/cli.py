@@ -21,6 +21,7 @@ from pocketclaw.tools.builtin import (
     CalendarPrepTool,
     CreateSkillTool,
     DelegateToClaudeCodeTool,
+    ForgetTool,
     GmailBatchModifyTool,
     GmailCreateLabelTool,
     GmailListLabelsTool,
@@ -30,6 +31,8 @@ from pocketclaw.tools.builtin import (
     GmailSendTool,
     GmailTrashTool,
     ImageGenerateTool,
+    RecallTool,
+    RememberTool,
     ResearchTool,
     TextToSpeechTool,
     UrlExtractTool,
@@ -40,6 +43,9 @@ from pocketclaw.tools.builtin import (
 _TOOLS = {
     t.name: t
     for t in [
+        RememberTool(),
+        RecallTool(),
+        ForgetTool(),
         GmailSearchTool(),
         GmailReadTool(),
         GmailSendTool(),

@@ -83,6 +83,10 @@ class AgentLoop:
         session_key = message.session_key
         logger.info(f"⚡ Processing message from {session_key}")
 
+        # Keep context_builder in sync if memory manager was hot-reloaded
+        if self.context_builder.memory is not self.memory:
+            self.context_builder.memory = self.memory
+
         try:
             # 0. Injection scan for non-owner sources
             content = message.content
@@ -291,8 +295,11 @@ class AgentLoop:
                     session_key=session_key, role="assistant", content=full_response
                 )
 
-                # 6. Auto-learn: extract facts from conversation (mem0 only, non-blocking)
-                if self.settings.memory_backend == "mem0" and self.settings.mem0_auto_learn:
+                # 6. Auto-learn: extract facts from conversation (non-blocking)
+                should_auto_learn = (
+                    self.settings.memory_backend == "mem0" and self.settings.mem0_auto_learn
+                ) or (self.settings.memory_backend == "file" and self.settings.file_auto_learn)
+                if should_auto_learn:
                     asyncio.create_task(
                         self._auto_learn(message.content, full_response, session_key)
                     )
@@ -321,13 +328,15 @@ class AgentLoop:
         )
 
     async def _auto_learn(self, user_msg: str, assistant_msg: str, session_key: str) -> None:
-        """Background task: feed conversation turn to mem0 for fact extraction."""
+        """Background task: feed conversation turn for fact extraction."""
         try:
             messages = [
                 {"role": "user", "content": user_msg},
                 {"role": "assistant", "content": assistant_msg},
             ]
-            result = await self.memory.auto_learn(messages)
+            result = await self.memory.auto_learn(
+                messages, file_auto_learn=self.settings.file_auto_learn
+            )
             extracted = len(result.get("results", []))
             if extracted:
                 logger.debug("Auto-learned %d facts from %s", extracted, session_key)

@@ -24,7 +24,7 @@ class TestProfileResolution:
 
     def test_minimal_profile_only_memory(self):
         result = ToolPolicy.resolve_profile("minimal")
-        assert result == {"remember", "recall"}
+        assert result == {"remember", "recall", "forget"}
 
     def test_coding_profile_includes_fs_shell_memory(self):
         result = ToolPolicy.resolve_profile("coding")
@@ -54,7 +54,7 @@ class TestGroupExpansion:
 
     def test_expand_multiple_groups(self):
         result = ToolPolicy._expand_names(["group:shell", "group:memory"])
-        assert result == {"shell", "remember", "recall"}
+        assert result == {"shell", "remember", "recall", "forget"}
 
     def test_expand_mixed_groups_and_names(self):
         result = ToolPolicy._expand_names(["group:memory", "custom_tool"])

@@ -25,7 +25,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "group:fs": ["read_file", "write_file", "edit_file", "list_dir"],
     "group:shell": ["shell"],
     "group:browser": ["browser"],
-    "group:memory": ["remember", "recall"],
+    "group:memory": ["remember", "recall", "forget"],
     "group:desktop": ["desktop"],
     "group:search": ["web_search", "url_extract"],
     "group:media": ["image_generate"],

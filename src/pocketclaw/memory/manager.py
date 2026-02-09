@@ -256,7 +256,13 @@ class MemoryManager:
         """Search all memories."""
         return await self._store.search(query=query, limit=limit)
 
-    async def get_context_for_agent(self, max_chars: int = 4000) -> str:
+    async def get_context_for_agent(
+        self,
+        max_chars: int = 8000,
+        long_term_limit: int = 50,
+        daily_limit: int = 20,
+        entry_max_chars: int = 500,
+    ) -> str:
         """
         Get memory context for injection into agent system prompt.
 
@@ -265,18 +271,18 @@ class MemoryManager:
         parts = []
 
         # Long-term memories
-        long_term = await self._store.get_by_type(MemoryType.LONG_TERM, limit=10)
+        long_term = await self._store.get_by_type(MemoryType.LONG_TERM, limit=long_term_limit)
         if long_term:
             parts.append("## Long-term Memory\n")
             for entry in long_term:
-                parts.append(f"- {entry.content[:200]}")
+                parts.append(f"- {entry.content[:entry_max_chars]}")
 
         # Today's notes
-        daily = await self._store.get_by_type(MemoryType.DAILY, limit=5)
+        daily = await self._store.get_by_type(MemoryType.DAILY, limit=daily_limit)
         if daily:
             parts.append("\n## Today's Notes\n")
             for entry in daily:
-                parts.append(f"- {entry.content[:200]}")
+                parts.append(f"- {entry.content[:entry_max_chars]}")
 
         context = "\n".join(parts)
 
@@ -452,28 +458,86 @@ class MemoryManager:
         self,
         messages: list[dict[str, str]],
         user_id: str | None = None,
+        file_auto_learn: bool = False,
     ) -> dict:
         """Extract and evolve long-term facts from a conversation.
 
-        Only works with the mem0 backend. For file backend, this is a no-op.
+        Works with mem0 backend natively. For file backend, uses LLM-based
+        extraction when file_auto_learn=True.
 
         Args:
             messages: Recent conversation messages [{"role": "...", "content": "..."}].
             user_id: User ID for scoping.
+            file_auto_learn: Enable LLM extraction for file backend.
 
         Returns:
-            Result dict from mem0 (or empty dict for file backend).
+            Result dict (or empty dict if nothing extracted).
         """
         if hasattr(self._store, "auto_learn"):
             return await self._store.auto_learn(messages, user_id=user_id)
+
+        # File backend: use LLM-based fact extraction
+        if file_auto_learn:
+            return await self._file_auto_learn(messages)
+
         return {}
+
+    async def _file_auto_learn(self, messages: list[dict[str, str]]) -> dict:
+        """Extract facts from conversation using Haiku and save to file backend."""
+        try:
+            from anthropic import AsyncAnthropic
+
+            convo = "\n".join(f"{m['role'].capitalize()}: {m['content']}" for m in messages)
+            if len(convo) > 4000:
+                convo = convo[:4000]
+
+            client = AsyncAnthropic()
+            response = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=512,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            "Extract factual information about the user from this "
+                            "conversation. Return a JSON array of short fact strings. "
+                            "Only include concrete facts (name, preferences, projects, "
+                            "personal info). Return [] if no new facts.\n\n"
+                            f"{convo}"
+                        ),
+                    }
+                ],
+            )
+
+            import json
+
+            text = response.content[0].text.strip()
+            # Handle markdown code blocks
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            facts = json.loads(text)
+
+            if not isinstance(facts, list):
+                return {}
+
+            saved = 0
+            for fact in facts:
+                if isinstance(fact, str) and fact.strip():
+                    await self.remember(fact.strip(), tags=["auto-learned"])
+                    saved += 1
+
+            return {"results": [{"fact": f} for f in facts[:saved]]}
+
+        except Exception:
+            logger.debug("File auto-learn failed", exc_info=True)
+            return {}
 
     async def get_semantic_context(self, query: str, limit: int = 5) -> str:
         """Get semantically relevant memory context for a user query.
 
         Uses mem0 semantic search to find the most relevant memories
         for the current conversation. Falls back to get_context_for_agent()
-        for file backend.
+        for file backend or on any error.
 
         Args:
             query: The user's current message/query.
@@ -483,14 +547,20 @@ class MemoryManager:
             Formatted context string for system prompt injection.
         """
         if hasattr(self._store, "semantic_search"):
-            results = await self._store.semantic_search(query, limit=limit)
-            if results:
-                parts = ["## Relevant Memories\n"]
-                for item in results:
-                    memory_text = item.get("memory", "")
-                    if memory_text:
-                        parts.append(f"- {memory_text}")
-                return "\n".join(parts)
+            try:
+                results = await self._store.semantic_search(query, limit=limit)
+                if results:
+                    parts = ["## Relevant Memories\n"]
+                    for item in results:
+                        memory_text = item.get("memory", "")
+                        if memory_text:
+                            parts.append(f"- {memory_text}")
+                    return "\n".join(parts)
+            except Exception:
+                logger.debug(
+                    "Semantic search failed, falling back to standard context",
+                    exc_info=True,
+                )
 
         # Fall back to standard context
         return await self.get_context_for_agent()

@@ -101,6 +101,10 @@ class Settings(BaseSettings):
         default=True,
         description="Automatically extract facts from conversations into long-term memory",
     )
+    file_auto_learn: bool = Field(
+        default=False,
+        description="Auto-extract facts from conversations for file memory backend (uses Haiku)",
+    )
 
     # Session History Compaction
     compaction_recent_window: int = Field(
@@ -267,32 +271,22 @@ class Settings(BaseSettings):
     matrix_user_id: str | None = Field(
         default=None, description="Matrix user ID (e.g. @bot:matrix.org)"
     )
-    matrix_access_token: str | None = Field(
-        default=None, description="Matrix access token"
-    )
+    matrix_access_token: str | None = Field(default=None, description="Matrix access token")
     matrix_password: str | None = Field(
         default=None, description="Matrix password (alternative to access token)"
     )
     matrix_allowed_room_ids: list[str] = Field(
         default_factory=list, description="Matrix room IDs allowed to use the bot"
     )
-    matrix_device_id: str = Field(
-        default="POCKETPAW", description="Matrix device ID"
-    )
+    matrix_device_id: str = Field(default="POCKETPAW", description="Matrix device ID")
 
     # Microsoft Teams
-    teams_app_id: str | None = Field(
-        default=None, description="Microsoft Teams App ID"
-    )
-    teams_app_password: str | None = Field(
-        default=None, description="Microsoft Teams App Password"
-    )
+    teams_app_id: str | None = Field(default=None, description="Microsoft Teams App ID")
+    teams_app_password: str | None = Field(default=None, description="Microsoft Teams App Password")
     teams_allowed_tenant_ids: list[str] = Field(
         default_factory=list, description="Allowed Azure AD tenant IDs"
     )
-    teams_webhook_port: int = Field(
-        default=3978, description="Teams webhook listener port"
-    )
+    teams_webhook_port: int = Field(default=3978, description="Teams webhook listener port")
 
     # Google Chat
     gchat_mode: str = Field(
@@ -304,9 +298,7 @@ class Settings(BaseSettings):
     gchat_project_id: str | None = Field(
         default=None, description="Google Cloud project ID for Pub/Sub mode"
     )
-    gchat_subscription_id: str | None = Field(
-        default=None, description="Pub/Sub subscription ID"
-    )
+    gchat_subscription_id: str | None = Field(default=None, description="Pub/Sub subscription ID")
     gchat_allowed_space_ids: list[str] = Field(
         default_factory=list, description="Google Chat space IDs allowed to use the bot"
     )
@@ -343,6 +335,7 @@ class Settings(BaseSettings):
             "mem0_vector_store": self.mem0_vector_store,
             "mem0_ollama_base_url": self.mem0_ollama_base_url,
             "mem0_auto_learn": self.mem0_auto_learn,
+            "file_auto_learn": self.file_auto_learn,
             "compaction_recent_window": self.compaction_recent_window,
             "compaction_char_budget": self.compaction_char_budget,
             "compaction_summary_chars": self.compaction_summary_chars,
@@ -431,9 +424,7 @@ class Settings(BaseSettings):
             "matrix_device_id": self.matrix_device_id,
             # Teams
             "teams_app_id": self.teams_app_id or existing.get("teams_app_id"),
-            "teams_app_password": (
-                self.teams_app_password or existing.get("teams_app_password")
-            ),
+            "teams_app_password": (self.teams_app_password or existing.get("teams_app_password")),
             "teams_allowed_tenant_ids": self.teams_allowed_tenant_ids,
             "teams_webhook_port": self.teams_webhook_port,
             # Google Chat

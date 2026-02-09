@@ -48,6 +48,10 @@ class AgentContextBuilder:
             else:
                 memory_context = await self.memory.get_context_for_agent()
             if memory_context:
-                parts.append("\n# Memory Context\n" + memory_context)
+                parts.append(
+                    "\n# Memory Context (already loaded — use this directly, "
+                    "do NOT call recall unless you need something not listed here)\n"
+                    + memory_context
+                )
 
         return "\n\n".join(parts)

@@ -68,6 +68,22 @@ You have extra tools installed. Call them with:
 python -m pocketclaw.tools.cli <tool_name> '<json_args>'
 ```
 
+### Memory
+- `remember '{"content": "User name is Alice", "tags": ["personal"]}'` — save to long-term memory
+- `forget '{"query": "old preference"}'` — remove outdated memories
+
+**When to use remember:**
+- User tells you their name, preferences, or personal details
+- User explicitly asks "remember this"
+- You learn something important about the user's projects or workflow
+
+**Always remember proactively** — don't wait to be asked.
+If someone shares personal info, immediately call remember.
+
+**Reading memories:** Your system prompt already contains a "Memory
+Context" section with ALL saved memories pre-loaded. Just read it
+directly — never use a tool to look up what you already know.
+
 ### Email (Gmail — requires OAuth)
 - `gmail_search '{"query": "is:unread", "max_results": 10}'` — search emails
 - `gmail_read '{"message_id": "MSG_ID"}'` — read full email
@@ -379,12 +395,14 @@ class ClaudeAgentSDK:
             if not self._policy.is_mcp_server_allowed(cfg.name):
                 logger.info("MCP server '%s' blocked by tool policy", cfg.name)
                 continue
-            servers.append({
-                "name": cfg.name,
-                "command": cfg.command,
-                "args": cfg.args,
-                "env": cfg.env,
-            })
+            servers.append(
+                {
+                    "name": cfg.name,
+                    "command": cfg.command,
+                    "args": cfg.args,
+                    "env": cfg.env,
+                }
+            )
         return servers
 
     async def chat(

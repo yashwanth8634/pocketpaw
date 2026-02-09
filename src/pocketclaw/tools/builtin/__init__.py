@@ -20,7 +20,7 @@ from pocketclaw.tools.builtin.gmail import (
     GmailTrashTool,
 )
 from pocketclaw.tools.builtin.image_gen import ImageGenerateTool
-from pocketclaw.tools.builtin.memory import RecallTool, RememberTool
+from pocketclaw.tools.builtin.memory import ForgetTool, RecallTool, RememberTool
 from pocketclaw.tools.builtin.research import ResearchTool
 from pocketclaw.tools.builtin.shell import ShellTool
 from pocketclaw.tools.builtin.skill_gen import CreateSkillTool
@@ -36,6 +36,7 @@ __all__ = [
     "BrowserTool",
     "RememberTool",
     "RecallTool",
+    "ForgetTool",
     "WebSearchTool",
     "UrlExtractTool",
     "ImageGenerateTool",

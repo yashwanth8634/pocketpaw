@@ -286,6 +286,23 @@ ALWAYS instruct it to RETURN data as text, not open GUI apps.""",
             "required": ["query"],
         },
     },
+    {
+        "name": "forget",
+        "description": (
+            "Remove information from long-term memory. "
+            "Searches for matching memories and deletes them."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for and forget",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
@@ -368,14 +385,13 @@ class PocketPawOrchestrator:
                 continue
             # Build unique name: mcp_<server>__<tool>
             tool_name = f"mcp_{tool_info.server_name}__{tool_info.name}"
-            result.append({
-                "name": tool_name,
-                "description": (
-                    f"[MCP:{tool_info.server_name}] {tool_info.description}"
-                ),
-                "input_schema": tool_info.input_schema
-                or {"type": "object", "properties": {}},
-            })
+            result.append(
+                {
+                    "name": tool_name,
+                    "description": (f"[MCP:{tool_info.server_name}] {tool_info.description}"),
+                    "input_schema": tool_info.input_schema or {"type": "object", "properties": {}},
+                }
+            )
         return result
 
     def _parse_mcp_tool_name(self, tool_name: str) -> tuple[str, str] | None:
@@ -626,6 +642,25 @@ class PocketPawOrchestrator:
                     lines.append(f"{i}. {entry.content[:200]}{tags_str}")
 
                 return "\n".join(lines)
+
+            elif tool_name == "forget":
+                from pocketclaw.memory.manager import get_memory_manager
+
+                query = tool_input.get("query", "")
+                if not query:
+                    return "Error: No query provided for forget"
+
+                manager = get_memory_manager()
+                results = await manager.search(query, limit=5)
+                if not results:
+                    return f"No memories found matching: {query}"
+
+                deleted = 0
+                for entry in results:
+                    ok = await manager._store.delete(entry.id)
+                    if ok:
+                        deleted += 1
+                return f"Forgot {deleted} memory(ies) matching: {query}"
 
             else:
                 # Check if it's an MCP tool

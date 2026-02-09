@@ -264,7 +264,16 @@ async def startup_event():
 
     # Auto-start all configured channel adapters
     settings = Settings.load()
-    for ch in ("discord", "slack", "whatsapp", "telegram", "signal", "matrix", "teams", "google_chat"):
+    for ch in (
+        "discord",
+        "slack",
+        "whatsapp",
+        "telegram",
+        "signal",
+        "matrix",
+        "teams",
+        "google_chat",
+    ):
         try:
             if await _start_channel_adapter(ch, settings):
                 logger.info(f"{ch.title()} adapter auto-started alongside dashboard")
@@ -575,8 +584,14 @@ async def get_channels_status():
     settings = Settings.load()
     result = {}
     all_channels = (
-        "discord", "slack", "whatsapp", "telegram",
-        "signal", "matrix", "teams", "google_chat",
+        "discord",
+        "slack",
+        "whatsapp",
+        "telegram",
+        "signal",
+        "matrix",
+        "teams",
+        "google_chat",
     )
     for ch in all_channels:
         result[ch] = {
@@ -1110,7 +1125,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(Non
             data = await websocket.receive_json()
             action = data.get("action")
 
-            # Handle chat via MessageBus 
+            # Handle chat via MessageBus
             if action == "chat":
                 log_msg = f"⚡ Processing message with Backend: {settings.agent_backend} (Provider: {settings.llm_provider})"
                 logger.warning(log_msg)  # Use WARNING to ensure it shows up
@@ -1210,6 +1225,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(Non
 
                 # Reload memory manager with fresh settings
                 agent_loop.memory = get_memory_manager(force_reload=True)
+                agent_loop.context_builder.memory = agent_loop.memory
 
                 await websocket.send_json({"type": "message", "content": "⚙️ Settings updated"})
 
@@ -1806,6 +1822,7 @@ async def save_memory_settings(request: Request):
 
     manager = get_memory_manager(force_reload=True)
     agent_loop.memory = manager
+    agent_loop.context_builder.memory = manager
 
     return {"status": "ok"}
 
