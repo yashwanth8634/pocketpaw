@@ -26,10 +26,10 @@
   No subscription. No cloud lock-in. Just you and your Paw.
 </p>
 
-> **Beta:** This project is under active development. Expect breaking changes between versions.
+> **🚧 Beta:** This project is under active development. Expect breaking changes between versions.
 
 <p align="center">
-  <video src="https://github.com/pocketpaw/pocketpaw/raw/main/paw-intro-4.mp4" width="700" controls></video>
+  <video src="https://github.com/user-attachments/assets/3e3b3128-bf90-4dfe-a2ec-94116e4b3c25" width="700" controls></video>
 </p>
 
 ---
