@@ -19,7 +19,8 @@
         "height": 700,
         "minWidth": 480,
         "minHeight": 400,
-        "decorations": false,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
         "transparent": true
       },
       {
