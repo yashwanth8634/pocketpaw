@@ -20,7 +20,6 @@ import pytest
 
 from pocketpaw.usage_tracker import UsageTracker, _estimate_cost
 
-
 # ---------------------------------------------------------------------------
 # Bug 1 – total_tokens must include cached_input_tokens
 # ---------------------------------------------------------------------------

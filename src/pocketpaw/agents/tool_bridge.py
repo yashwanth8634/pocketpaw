@@ -31,9 +31,15 @@ logger = logging.getLogger(__name__)
 _ALWAYS_EXCLUDED = frozenset({"BrowserTool", "DesktopTool"})
 
 # Tools excluded only for claude_agent_sdk -- these are provided natively by the CLI.
-_CLAUDE_SDK_EXCLUDED = frozenset({
-    "ShellTool", "ReadFileTool", "WriteFileTool", "ListDirTool", "EditFileTool",
-})
+_CLAUDE_SDK_EXCLUDED = frozenset(
+    {
+        "ShellTool",
+        "ReadFileTool",
+        "WriteFileTool",
+        "ListDirTool",
+        "EditFileTool",
+    }
+)
 
 
 def _instantiate_all_tools(backend: str = "claude_agent_sdk") -> list[BaseTool]:
